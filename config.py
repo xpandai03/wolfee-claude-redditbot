@@ -79,7 +79,8 @@ Tier 3 — post is explicitly asking for tools / recommendations in Wolfee's exa
 
 # --- body rules for drafts (Tier 2 + Tier 3) ---
 BODY_RULES = """
-Length: under 120 words. Aim for 70-110.
+Length: STRICT ceiling of 120 words. Aim for 80-110. Count your words before
+   submitting. If you go over 120, cut sentences — do not just trim adjectives.
 Voice: first-person experience framing. Talk like a human who has lived the problem.
 Banned phrases / words: "game changer", "revolutionary", "excited to connect", "synergy",
    "leverage", "circle back".

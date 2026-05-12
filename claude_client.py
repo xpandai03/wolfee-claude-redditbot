@@ -122,21 +122,59 @@ def _parse_classify(raw: str) -> ClassifyResult:
     return ClassifyResult(tier=tier, reason=reason)
 
 
+MAX_WORDS = 120
+
+
 def draft_comment(post: RedditPost, tier: int, keyword: str | None = None) -> str:
-    """Draft a comment for Tier 2 or Tier 3. Returns plain-prose comment body."""
+    """Draft a comment for Tier 2 or Tier 3. Returns plain-prose comment body.
+
+    If the first draft exceeds MAX_WORDS, send one follow-up turn asking the
+    model to cut. Return whichever version is closer to (and ideally under)
+    the cap.
+    """
     if tier not in (2, 3):
         raise ValueError(f"draft_comment only supports tier 2 or 3; got {tier}")
     client = _get_client()
     system_text = _render_draft_system(tier)
     user_text = _post_to_user_message(post, keyword)
 
+    messages: list[dict] = [{"role": "user", "content": user_text}]
+
     resp = client.messages.create(
         model=config.CLAUDE_MODEL,
         max_tokens=600,
         system=[{"type": "text", "text": system_text, "cache_control": {"type": "ephemeral"}}],
-        messages=[{"role": "user", "content": user_text}],
+        messages=messages,
     )
-    return _scrub_draft(resp.content[0].text)
+    draft = _scrub_draft(resp.content[0].text)
+    wc = len(draft.split())
+
+    if wc <= MAX_WORDS:
+        return draft
+
+    # One retry: feed the over-long draft back and demand a shorter version.
+    messages.append({"role": "assistant", "content": draft})
+    messages.append(
+        {
+            "role": "user",
+            "content": (
+                f"That draft is {wc} words. The hard ceiling is {MAX_WORDS}. "
+                f"Rewrite it so it is under {MAX_WORDS} words. Cut whole sentences "
+                "if you have to; do not just shave adjectives. Keep the voice, "
+                "specificity to the OP, and the ending question. Respond with "
+                "ONLY the new comment body."
+            ),
+        }
+    )
+    resp2 = client.messages.create(
+        model=config.CLAUDE_MODEL,
+        max_tokens=600,
+        system=[{"type": "text", "text": system_text, "cache_control": {"type": "ephemeral"}}],
+        messages=messages,
+    )
+    draft2 = _scrub_draft(resp2.content[0].text)
+    # Prefer the shorter draft. If the retry somehow grew, keep the original.
+    return draft2 if len(draft2.split()) < wc else draft
 
 
 # Body-rule scrubber: catches the obvious banned punctuation in case the model slips.

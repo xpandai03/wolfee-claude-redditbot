@@ -1,0 +1,21 @@
+# secrets & local state
+.env
+credentials.json
+token.json
+state/
+*.db
+*.sqlite
+*.sqlite3
+
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+
+# editor / OS
+.DS_Store
+.vscode/
+.idea/

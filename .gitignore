@@ -3,6 +3,7 @@
 credentials.json
 token.json
 state/
+logs/
 *.db
 *.sqlite
 *.sqlite3

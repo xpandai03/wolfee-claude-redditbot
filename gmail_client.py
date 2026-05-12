@@ -10,6 +10,7 @@ import base64
 import re
 from dataclasses import dataclass
 from typing import Iterable
+from urllib.parse import parse_qs, unquote, urlparse
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
@@ -19,9 +20,25 @@ from googleapiclient.discovery import build
 import config
 
 REDDIT_URL_RE = re.compile(
-    r"https?://(?:www\.|old\.|new\.)?reddit\.com/r/[A-Za-z0-9_]+/comments/[A-Za-z0-9_]+(?:/[^\s)>\]]*)?",
+    r"https?://(?:www\.|old\.|new\.)?reddit\.com/r/[A-Za-z0-9_]+/comments/[A-Za-z0-9_]+(?:/[^\s)>\]\"']*)?",
     re.IGNORECASE,
 )
+
+# f5bot wraps every link as https://f5bot.com/url?u=<urlencoded>&i=...&h=...
+F5BOT_REDIRECT_RE = re.compile(
+    r"https?://f5bot\.com/url\?[^\s\"')>\]]+",
+    re.IGNORECASE,
+)
+
+# Reddit comment URLs look like /r/<sub>/comments/<post_id>/c/<comment_id>
+# We want the post URL — /r/<sub>/comments/<post_id>/
+REDDIT_COMMENT_TAIL_RE = re.compile(
+    r"(/r/[^/]+/comments/[^/]+)/c/[^/?#]+.*$",
+    re.IGNORECASE,
+)
+
+# Body line that f5bot always includes
+KEYWORD_BODY_RE = re.compile(r"^\s*Keyword:\s*[\"']?(.+?)[\"']?\s*$", re.IGNORECASE | re.MULTILINE)
 
 
 @dataclass
@@ -134,11 +151,54 @@ def _extract_body(payload: dict) -> str:
 
 
 def _extract_keyword(subject: str, body: str) -> str | None:
-    """f5bot subjects look like: 'F5Bot Alert: <keyword>' — best-effort parse."""
-    m = re.search(r"f5bot\s*(?:alert|update|notification)?\s*[:\-]\s*(.+)", subject, re.I)
+    """f5bot puts `Keyword: "<word>"` on its own line in the body — most reliable."""
+    m = KEYWORD_BODY_RE.search(body)
+    if m:
+        return m.group(1).strip().strip('"').strip("'")
+    # Subject fallback for any older-format alerts: "F5Bot found something: <kw>"
+    m = re.search(r"f5bot\s*(?:alert|update|notification|found something)?\s*[:\-]\s*(.+)$", subject, re.I)
     if m:
         return m.group(1).strip()
     return None
+
+
+def _post_url_from_comment_url(url: str) -> str:
+    """Strip /c/<comment_id>... so we end up on the parent post permalink."""
+    p = urlparse(url)
+    new_path = REDDIT_COMMENT_TAIL_RE.sub(r"\1/", p.path)
+    if new_path == p.path:
+        return url
+    return p._replace(path=new_path, query="", fragment="").geturl()
+
+
+def _extract_reddit_urls(text: str) -> list[str]:
+    """Pull reddit post URLs out of `text`, including those wrapped by f5bot.
+
+    Returns deduplicated post-URLs (comment URLs normalized to their parent post).
+    """
+    found: list[str] = []
+    seen: set[str] = set()
+
+    def add(u: str) -> None:
+        normalized = _post_url_from_comment_url(u).rstrip(".,);]")
+        if normalized not in seen:
+            seen.add(normalized)
+            found.append(normalized)
+
+    # 1) f5bot-wrapped redirects: decode the `u=` param then re-scan that for reddit URLs
+    for redirect in F5BOT_REDIRECT_RE.findall(text):
+        qs = parse_qs(urlparse(redirect).query)
+        encoded = (qs.get("u") or [""])[0]
+        decoded = unquote(encoded)
+        for m in REDDIT_URL_RE.findall(decoded):
+            add(m)
+
+    # 2) Direct reddit URLs in the body (covers anyone who turned off f5bot redirects,
+    #    or for testing with hand-crafted emails)
+    for m in REDDIT_URL_RE.findall(text):
+        add(m)
+
+    return found
 
 
 def parse_email(service, message_id: str) -> F5BotEmail:
@@ -155,14 +215,10 @@ def parse_email(service, message_id: str) -> F5BotEmail:
     body = _extract_body(msg["payload"])
     keyword = _extract_keyword(subject, body)
 
-    seen: set[str] = set()
-    matches: list[F5BotMatch] = []
-    for url in REDDIT_URL_RE.findall(body + "\n" + snippet):
-        normalized = url.rstrip(".,);]")
-        if normalized in seen:
-            continue
-        seen.add(normalized)
-        matches.append(F5BotMatch(url=normalized, keyword=keyword))
+    matches: list[F5BotMatch] = [
+        F5BotMatch(url=u, keyword=keyword)
+        for u in _extract_reddit_urls(body + "\n" + snippet)
+    ]
 
     return F5BotEmail(
         message_id=message_id,

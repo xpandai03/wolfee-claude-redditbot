@@ -6,6 +6,7 @@ Safe to re-run: emails already in the processed log are skipped silently.
 
 from __future__ import annotations
 
+import argparse
 import re
 import sys
 import time
@@ -82,6 +83,15 @@ def _process_email(email: gmail_client.F5BotEmail) -> tuple[str, str, int | None
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(description="Run one pass over labeled f5bot emails.")
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Max number of emails to process this run (default: no limit).",
+    )
+    args = parser.parse_args()
+
     db.init_db()
     run_started = datetime.now(timezone.utc).isoformat(timespec="seconds")
 
@@ -92,10 +102,14 @@ def main() -> int:
         return 2
 
     processed_ids = db.get_processed_ids()
-    print(f"[{run_started}] starting run. {len(processed_ids)} email(s) in processed log.")
+    limit_str = f", limit={args.limit}" if args.limit else ""
+    print(f"[{run_started}] starting run. {len(processed_ids)} email(s) in processed log{limit_str}.")
 
     new_this_run = 0
     for email in gmail_client.iter_unprocessed_emails(service, processed_ids):
+        if args.limit is not None and new_this_run >= args.limit:
+            print(f"  (--limit {args.limit} reached; stopping)")
+            break
         new_this_run += 1
         url = email.matches[0].url if email.matches else None
         try:

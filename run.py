@@ -184,6 +184,7 @@ def main() -> int:
             break
         new_this_run += 1
         url = email.matches[0].url if email.matches else None
+        keyword = email.matches[0].keyword if email.matches else None
         post_id = _post_id_from_url(url) if url else None
         try:
             action, line, tier, post_id_out, created_utc = _process_email(email)
@@ -193,6 +194,7 @@ def main() -> int:
                 post_url=url,
                 post_id=post_id_out or post_id,
                 created_utc=created_utc,
+                keyword=keyword,
                 tier=tier,
             )
             print(f"[{email.message_id}] {action}")
@@ -205,6 +207,7 @@ def main() -> int:
                 "error",
                 post_url=url,
                 post_id=post_id,
+                keyword=keyword,
                 note=f"{type(exc).__name__}: {exc}",
             )
 

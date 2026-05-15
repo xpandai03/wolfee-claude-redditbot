@@ -53,6 +53,7 @@ CREATE TABLE IF NOT EXISTS processed_emails (
     post_url      TEXT,
     post_id       TEXT,
     created_utc   REAL,
+    keyword       TEXT,
     tier          INTEGER,
     action        TEXT NOT NULL,
     note          TEXT
@@ -101,6 +102,7 @@ def record(
     post_url: str | None = None,
     post_id: str | None = None,
     created_utc: float | None = None,
+    keyword: str | None = None,
     tier: int | None = None,
     note: str | None = None,
 ) -> None:
@@ -109,14 +111,15 @@ def record(
     with _conn() as c:
         c.execute(
             "INSERT OR REPLACE INTO processed_emails "
-            "(email_id, processed_at, post_url, post_id, created_utc, tier, action, note) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "(email_id, processed_at, post_url, post_id, created_utc, keyword, tier, action, note) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 email_id,
                 datetime.now(timezone.utc).isoformat(timespec="seconds"),
                 post_url,
                 post_id,
                 created_utc,
+                keyword,
                 tier,
                 action,
                 note,

@@ -1,5 +1,6 @@
 # secrets & local state
 .env
+.env.local
 credentials.json
 token.json
 state/
@@ -20,3 +21,5 @@ venv/
 .DS_Store
 .vscode/
 .idea/
+*.swp
+*.swo

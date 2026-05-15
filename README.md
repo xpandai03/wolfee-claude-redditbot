@@ -72,7 +72,7 @@ Copy `.env.example` → `.env` and fill in:
 | var | value |
 |---|---|
 | `ANTHROPIC_API_KEY` | `sk-ant-...` |
-| `CLAUDE_MODEL` | `claude-opus-4-7` (or `claude-sonnet-4-6` to cost-optimize) |
+| `CLAUDE_MODEL` | `claude-sonnet-4-6` (default; swap to `claude-opus-4-7` if you want max quality at ~5x cost) |
 | `TELEGRAM_BOT_TOKEN` | from BotFather |
 | `TELEGRAM_CHAT_ID` | numeric chat id (private chats are positive; groups start with `-100`) |
 | `GMAIL_LABEL` | `f5bot-wolfee` |

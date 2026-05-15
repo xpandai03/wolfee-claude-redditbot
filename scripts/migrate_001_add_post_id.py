@@ -10,8 +10,13 @@ import sqlite3
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
-DB = ROOT / "state" / "processed.db"
+# Make the project root importable so STATE_DIR / DB_PATH respect env vars
+# the same way the runtime does (so this script works on Railway with
+# STATE_DIR=/data the same way it works on the Mac with the default path).
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import config  # noqa: E402
+
+DB = config.DB_PATH
 
 POST_ID_RE = re.compile(r"/comments/([A-Za-z0-9]+)", re.IGNORECASE)
 

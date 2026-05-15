@@ -10,8 +10,10 @@ import sqlite3
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
-DB = ROOT / "state" / "processed.db"
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import config  # noqa: E402
+
+DB = config.DB_PATH
 
 
 def main() -> int:

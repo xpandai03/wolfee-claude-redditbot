@@ -10,11 +10,41 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 from anthropic import Anthropic
 
 import config
 from reddit_client import RedditPost
+
+
+API_USAGE_LOG = config.ROOT / "logs" / "api_usage.jsonl"
+
+
+def _log_usage(function: str, resp) -> None:
+    """Append one JSON line per Claude call. Never raises — observability only."""
+    try:
+        usage = getattr(resp, "usage", None)
+        input_tokens = getattr(usage, "input_tokens", None) if usage else None
+        output_tokens = getattr(usage, "output_tokens", None) if usage else None
+        cache_creation = getattr(usage, "cache_creation_input_tokens", None) if usage else None
+        cache_read = getattr(usage, "cache_read_input_tokens", None) if usage else None
+        model = getattr(resp, "model", None) or config.CLAUDE_MODEL
+        record = {
+            "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "function": function,
+            "model": model,
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "cache_creation_input_tokens": cache_creation,
+            "cache_read_input_tokens": cache_read,
+        }
+        API_USAGE_LOG.parent.mkdir(parents=True, exist_ok=True)
+        with API_USAGE_LOG.open("a") as f:
+            f.write(json.dumps(record) + "\n")
+    except Exception:
+        # Never fail a run because usage logging hiccupped.
+        pass
 
 
 _client: Anthropic | None = None
@@ -118,6 +148,7 @@ def classify_post(post: RedditPost, keyword: str | None = None) -> ClassifyResul
         system=[{"type": "text", "text": system_text, "cache_control": {"type": "ephemeral"}}],
         messages=[{"role": "user", "content": user_text}],
     )
+    _log_usage("classify", resp)
     raw = resp.content[0].text.strip()
     return _parse_classify(raw)
 
@@ -160,6 +191,7 @@ def draft_comment(post: RedditPost, tier: int, keyword: str | None = None) -> Dr
         system=[{"type": "text", "text": system_text, "cache_control": {"type": "ephemeral"}}],
         messages=messages,
     )
+    _log_usage(f"draft_tier{tier}", resp)
     raw_first = resp.content[0].text.strip()
     if _is_skip_sentinel(raw_first):
         return DraftResult(draft=None, skip_reason=f"tier{tier}_no_fit")
@@ -188,6 +220,7 @@ def draft_comment(post: RedditPost, tier: int, keyword: str | None = None) -> Dr
             system=[{"type": "text", "text": system_text, "cache_control": {"type": "ephemeral"}}],
             messages=messages,
         )
+        _log_usage(f"draft_tier{tier}_retry", resp2)
         raw_second = resp2.content[0].text.strip()
         if _is_skip_sentinel(raw_second):
             return DraftResult(draft=None, skip_reason=f"tier{tier}_no_fit")

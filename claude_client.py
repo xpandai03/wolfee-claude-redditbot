@@ -92,6 +92,20 @@ class ClassifyResult:
     reason: str
 
 
+@dataclass
+class DraftResult:
+    """Either a delivered draft or a skip reason (mutually exclusive).
+
+    skip_reason values: "tier2_no_fit", "tier2_missing_brand",
+    "tier3_no_fit", "tier3_missing_brand".
+    """
+    draft: str | None
+    skip_reason: str | None
+
+
+SKIP_SENTINEL = "SKIP_NO_FIT"
+
+
 def classify_post(post: RedditPost, keyword: str | None = None) -> ClassifyResult:
     """Return Tier 1/2/3 + a one-sentence reason."""
     client = _get_client()
@@ -125,12 +139,12 @@ def _parse_classify(raw: str) -> ClassifyResult:
 MAX_WORDS = 120
 
 
-def draft_comment(post: RedditPost, tier: int, keyword: str | None = None) -> str:
-    """Draft a comment for Tier 2 or Tier 3. Returns plain-prose comment body.
+def draft_comment(post: RedditPost, tier: int, keyword: str | None = None) -> DraftResult:
+    """Draft a comment for Tier 2 or Tier 3.
 
-    If the first draft exceeds MAX_WORDS, send one follow-up turn asking the
-    model to cut. Return whichever version is closer to (and ideally under)
-    the cap.
+    Returns a DraftResult: either `draft` is set (passed brand + sentinel
+    checks) or `skip_reason` is set. Skip reasons are enforced in code as a
+    safety net on top of the prompt-level rules.
     """
     if tier not in (2, 3):
         raise ValueError(f"draft_comment only supports tier 2 or 3; got {tier}")
@@ -146,35 +160,53 @@ def draft_comment(post: RedditPost, tier: int, keyword: str | None = None) -> st
         system=[{"type": "text", "text": system_text, "cache_control": {"type": "ephemeral"}}],
         messages=messages,
     )
-    draft = _scrub_draft(resp.content[0].text)
+    raw_first = resp.content[0].text.strip()
+    if _is_skip_sentinel(raw_first):
+        return DraftResult(draft=None, skip_reason=f"tier{tier}_no_fit")
+
+    draft = _scrub_draft(raw_first)
     wc = len(draft.split())
 
-    if wc <= MAX_WORDS:
-        return draft
+    if wc > MAX_WORDS:
+        # One retry: feed the over-long draft back and demand a shorter version.
+        messages.append({"role": "assistant", "content": draft})
+        messages.append(
+            {
+                "role": "user",
+                "content": (
+                    f"That draft is {wc} words. The hard ceiling is {MAX_WORDS}. "
+                    f"Rewrite it so it is under {MAX_WORDS} words. Cut whole sentences "
+                    "if you have to; do not just shave adjectives. Keep the voice, "
+                    "specificity to the OP, the Wolfee mention, and the ending "
+                    "question. Respond with ONLY the new comment body."
+                ),
+            }
+        )
+        resp2 = client.messages.create(
+            model=config.CLAUDE_MODEL,
+            max_tokens=600,
+            system=[{"type": "text", "text": system_text, "cache_control": {"type": "ephemeral"}}],
+            messages=messages,
+        )
+        raw_second = resp2.content[0].text.strip()
+        if _is_skip_sentinel(raw_second):
+            return DraftResult(draft=None, skip_reason=f"tier{tier}_no_fit")
+        draft2 = _scrub_draft(raw_second)
+        # Prefer the shorter draft. If the retry somehow grew, keep the original.
+        if len(draft2.split()) < wc:
+            draft = draft2
 
-    # One retry: feed the over-long draft back and demand a shorter version.
-    messages.append({"role": "assistant", "content": draft})
-    messages.append(
-        {
-            "role": "user",
-            "content": (
-                f"That draft is {wc} words. The hard ceiling is {MAX_WORDS}. "
-                f"Rewrite it so it is under {MAX_WORDS} words. Cut whole sentences "
-                "if you have to; do not just shave adjectives. Keep the voice, "
-                "specificity to the OP, and the ending question. Respond with "
-                "ONLY the new comment body."
-            ),
-        }
-    )
-    resp2 = client.messages.create(
-        model=config.CLAUDE_MODEL,
-        max_tokens=600,
-        system=[{"type": "text", "text": system_text, "cache_control": {"type": "ephemeral"}}],
-        messages=messages,
-    )
-    draft2 = _scrub_draft(resp2.content[0].text)
-    # Prefer the shorter draft. If the retry somehow grew, keep the original.
-    return draft2 if len(draft2.split()) < wc else draft
+    # Brand-mention safety net: enforce in code for both tiers.
+    if "wolfee" not in draft.lower():
+        return DraftResult(draft=None, skip_reason=f"tier{tier}_missing_brand")
+
+    return DraftResult(draft=draft, skip_reason=None)
+
+
+def _is_skip_sentinel(text: str) -> bool:
+    """True iff the model output is the literal SKIP_NO_FIT sentinel."""
+    stripped = re.sub(r"^[`'\"\s]+|[`'\"\s.]+$", "", text)
+    return stripped == SKIP_SENTINEL
 
 
 # Body-rule scrubber: catches the obvious banned punctuation in case the model slips.

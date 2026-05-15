@@ -74,7 +74,16 @@ def _process_email(email: gmail_client.F5BotEmail) -> tuple[str, str, int | None
         return "skipped_tier1", f"  · Tier 1 — {result.reason}", 1, post_id
 
     # Draft + deliver
-    draft = claude_client.draft_comment(post, tier=result.tier, keyword=match.keyword)
+    draft_result = claude_client.draft_comment(post, tier=result.tier, keyword=match.keyword)
+    if draft_result.skip_reason:
+        action = f"skipped_{draft_result.skip_reason}"
+        return (
+            action,
+            f"  · Tier {result.tier} {draft_result.skip_reason} — r/{post.subreddit} · {post.title[:60]}",
+            result.tier,
+            post_id,
+        )
+    draft = draft_result.draft
     delivery = telegram_client.DraftDelivery(
         tier=result.tier,
         subreddit=post.subreddit,
@@ -157,12 +166,18 @@ def main() -> int:
     # End-of-run summary line, scoped to this run
     counts = db.counts_since(run_started)
     tiers = db.tier_counts_since(run_started)
-    skipped_total = (
-        counts['skipped_tier1']
-        + counts['skipped_burned_sub']
-        + counts['skipped_fetch_failed']
-        + counts['skipped_no_url']
-        + counts['skipped_duplicate_post']
+    skipped_total = sum(
+        counts[a] for a in (
+            'skipped_tier1',
+            'skipped_burned_sub',
+            'skipped_fetch_failed',
+            'skipped_no_url',
+            'skipped_duplicate_post',
+            'skipped_tier2_no_fit',
+            'skipped_tier2_missing_brand',
+            'skipped_tier3_no_fit',
+            'skipped_tier3_missing_brand',
+        )
     )
     print(
         f"Processed {new_this_run} email(s): "
@@ -173,7 +188,11 @@ def main() -> int:
         f"burned: {counts['skipped_burned_sub']}, "
         f"duplicate: {counts['skipped_duplicate_post']}, "
         f"fetch failed: {counts['skipped_fetch_failed']}, "
-        f"no url: {counts['skipped_no_url']}), "
+        f"no url: {counts['skipped_no_url']}, "
+        f"t2 no_fit: {counts['skipped_tier2_no_fit']}, "
+        f"t2 missing_brand: {counts['skipped_tier2_missing_brand']}, "
+        f"t3 no_fit: {counts['skipped_tier3_no_fit']}, "
+        f"t3 missing_brand: {counts['skipped_tier3_missing_brand']}), "
         f"errors: {counts['error']}"
     )
     return 0

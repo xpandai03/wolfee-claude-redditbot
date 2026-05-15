@@ -20,6 +20,10 @@ ActionLiteral = Literal[
     "skipped_fetch_failed",
     "skipped_no_url",
     "skipped_duplicate_post",
+    "skipped_tier2_no_fit",
+    "skipped_tier2_missing_brand",
+    "skipped_tier3_no_fit",
+    "skipped_tier3_missing_brand",
     "error",
 ]
 
@@ -30,6 +34,10 @@ ALL_ACTIONS: tuple[ActionLiteral, ...] = (
     "skipped_fetch_failed",
     "skipped_no_url",
     "skipped_duplicate_post",
+    "skipped_tier2_no_fit",
+    "skipped_tier2_missing_brand",
+    "skipped_tier3_no_fit",
+    "skipped_tier3_missing_brand",
     "error",
 )
 

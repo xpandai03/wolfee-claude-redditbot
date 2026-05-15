@@ -56,6 +56,15 @@ def _process_email(email: gmail_client.F5BotEmail) -> tuple[str, str, int | None
     if sub and sub.lower() in config.BURNED_SUBS:
         return "skipped_burned_sub", f"  · burned sub r/{sub} — {match.url}", None, post_id
 
+    # Allowlist gate — must run before any Reddit fetch / LLM call.
+    if sub and sub.lower() not in config.ALLOWED_SUBS:
+        return (
+            "skipped_not_allowed_sub",
+            f"  · r/{sub} not in allowlist — {match.url}",
+            None,
+            post_id,
+        )
+
     # Reddit fetch
     try:
         post = reddit_client.fetch_post(match.url, top_comments_n=5)
@@ -67,6 +76,13 @@ def _process_email(email: gmail_client.F5BotEmail) -> tuple[str, str, int | None
     # Defensive: subreddit-from-URL can disagree with reality (cross-posts, etc).
     if post.subreddit.lower() in config.BURNED_SUBS:
         return "skipped_burned_sub", f"  · burned sub r/{post.subreddit} (post-fetch)", None, post_id
+    if post.subreddit.lower() not in config.ALLOWED_SUBS:
+        return (
+            "skipped_not_allowed_sub",
+            f"  · r/{post.subreddit} not in allowlist (post-fetch)",
+            None,
+            post_id,
+        )
 
     # Classify
     result = claude_client.classify_post(post, keyword=match.keyword)
@@ -173,6 +189,7 @@ def main() -> int:
             'skipped_fetch_failed',
             'skipped_no_url',
             'skipped_duplicate_post',
+            'skipped_not_allowed_sub',
             'skipped_tier2_no_fit',
             'skipped_tier2_missing_brand',
             'skipped_tier3_no_fit',
@@ -186,6 +203,7 @@ def main() -> int:
         f"{skipped_total} skipped "
         f"(Tier 1: {counts['skipped_tier1']}, "
         f"burned: {counts['skipped_burned_sub']}, "
+        f"not allowed: {counts['skipped_not_allowed_sub']}, "
         f"duplicate: {counts['skipped_duplicate_post']}, "
         f"fetch failed: {counts['skipped_fetch_failed']}, "
         f"no url: {counts['skipped_no_url']}, "

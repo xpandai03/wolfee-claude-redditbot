@@ -35,6 +35,42 @@ GMAIL_SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"]
 # Match is case-insensitive against the sub name (without r/ prefix).
 BURNED_SUBS = {"saas", "sales"}
 
+# --- allowlist: only these subs reach the classifier ---
+# Burned subs always override the allowlist (hard block).
+# Lowercase comparison; entries here must be lowercase.
+ALLOWED_SUBS = frozenset({
+    "jobsearchhacks",
+    "interviewhacking",
+    "recruitinghell",
+    "techsales",
+    "salesdevelopment",
+    "cscareerquestions",
+    "sales",
+    "sdr",
+    "salesoperations",
+    "findapath",
+    "layoffs",
+    "jobs",
+    "csmajors",
+    "productmanagement",
+    "consulting",
+    "askhr",
+    "interviews",
+    "interviewhackers",
+    "jobsearch",
+    "careeradvice",
+    "careeradvice_india",
+    "productmanagement_in",
+    "ainotetaker",
+    "aitoolbench",
+    "indiehackers",
+    "entrepreneurridealong",
+    "sideproject",
+    "ycombinator",
+    "microsaas",
+    "growmybusiness",
+})
+
 # --- wolfee positioning ---
 WOLFEE_USE_CASES = """
 Wolfee's core use cases (for tier classification):

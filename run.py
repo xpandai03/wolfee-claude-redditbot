@@ -171,14 +171,33 @@ def main() -> int:
         service = gmail_client.get_service()
     except Exception as e:
         print(f"FATAL: gmail auth failed: {e}", file=sys.stderr)
+        traceback.print_exc(file=sys.stderr)
+        telegram_client.send_error_alert("gmail auth", e)
         return 2
 
-    processed_ids = db.get_processed_ids()
+    try:
+        processed_ids = db.get_processed_ids()
+    except Exception as e:
+        print(f"FATAL: db read failed: {e}", file=sys.stderr)
+        traceback.print_exc(file=sys.stderr)
+        telegram_client.send_error_alert("db read", e)
+        return 3
     limit_str = f", limit={args.limit}" if args.limit else ""
     print(f"[{run_started}] starting run. {len(processed_ids)} email(s) in processed log{limit_str}.")
 
     new_this_run = 0
-    for email in gmail_client.iter_unprocessed_emails(service, processed_ids):
+    email_iter = gmail_client.iter_unprocessed_emails(service, processed_ids)
+    while True:
+        try:
+            email = next(email_iter)
+        except StopIteration:
+            break
+        except Exception as e:
+            # Iterator itself failed (label lookup, Gmail listing, network).
+            print(f"FATAL: gmail listing failed mid-stream: {e}", file=sys.stderr)
+            traceback.print_exc(file=sys.stderr)
+            telegram_client.send_error_alert("gmail listing", e)
+            return 4
         if args.limit is not None and new_this_run >= args.limit:
             print(f"  (--limit {args.limit} reached; stopping)")
             break
@@ -209,6 +228,9 @@ def main() -> int:
                 post_id=post_id,
                 keyword=keyword,
                 note=f"{type(exc).__name__}: {exc}",
+            )
+            telegram_client.send_error_alert(
+                f"email {email.message_id}", exc
             )
 
     if new_this_run == 0:

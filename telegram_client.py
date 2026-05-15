@@ -25,6 +25,23 @@ TELEGRAM_API = "https://api.telegram.org"
 MAX_LEN = 4000
 
 
+def send_error_alert(prefix: str, exc: BaseException) -> None:
+    """Best-effort short error notification. NEVER raises.
+
+    Used by run.py to surface silent breaks (auth expiry, network, API errors)
+    so you notice within hours, not days. If Telegram itself is the failure
+    domain, this becomes a no-op and the error stays in logs/cron.log only.
+    """
+    try:
+        msg_body = f"{type(exc).__name__}: {exc}"[:200]
+        text = html.escape(f"⚠ Wolfee Reddit bot error: {prefix}: {msg_body}")
+        send_message(text, disable_preview=True)
+    except Exception:
+        # Swallow — do not let alert failure block the main pipeline or
+        # cause a recursive error storm.
+        pass
+
+
 def send_message(text: str, parse_mode: str = "HTML", disable_preview: bool = True) -> dict:
     if not config.TELEGRAM_BOT_TOKEN or not config.TELEGRAM_CHAT_ID:
         raise TelegramError("TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID not set in .env")

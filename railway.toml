@@ -1,0 +1,41 @@
+# Railway deployment config for the Wolfee Reddit comment seeder.
+# Reference: https://docs.railway.com/reference/config-as-code
+#
+# Service shape: a cron-scheduled Python service. Railway invokes
+# `startCommand` every time the cron expression fires; the process is
+# expected to exit when run.py finishes (it does — one full pass per call).
+#
+# Volume: attach a Railway volume via the dashboard (not declared here —
+# Railway volumes are dashboard-only). Mount path: /data. Set the env
+# vars STATE_DIR=/data, LOGS_DIR=/data/logs, TOKEN_PATH=/data/token.json
+# so SQLite state, the api_usage.jsonl log, and the OAuth refresh-rotated
+# token all persist across deploys.
+#
+# Required env vars (set in Railway dashboard, never committed):
+#   ANTHROPIC_API_KEY        sk-ant-...
+#   TELEGRAM_BOT_TOKEN       from BotFather
+#   TELEGRAM_CHAT_ID         numeric chat id
+#   GMAIL_LABEL              f5bot-wolfee
+#   GMAIL_CREDENTIALS_JSON   contents of credentials.json (one-time bootstrap)
+#   GMAIL_TOKEN_JSON         contents of token.json     (one-time bootstrap)
+#   STATE_DIR                /data
+#   LOGS_DIR                 /data/logs
+#   TOKEN_PATH               /data/token.json
+# Optional:
+#   CLAUDE_MODEL             defaults to claude-sonnet-4-6 if unset
+#   CREDENTIALS_PATH         defaults to repo-root/credentials.json
+#   REDDIT_USER_AGENT        defaults to wolfee-comment-seeder/0.1 ...
+#
+# If NIXPACKS build fails on first deploy, swap `builder = "NIXPACKS"` to
+# `builder = "RAILPACK"` (Railway's modern default), or add a Dockerfile
+# and let Railway auto-detect it.
+
+[build]
+builder = "NIXPACKS"
+
+[deploy]
+# `-u` makes Python stdout unbuffered so Railway log stream is real-time.
+startCommand = "python -u run.py"
+cronSchedule = "*/30 * * * *"
+# Cron services don't auto-restart — each invocation is a discrete process.
+restartPolicyType = "NEVER"

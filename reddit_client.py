@@ -45,6 +45,7 @@ class RedditPost:
     is_self: bool
     over_18: bool
     permalink: str         # absolute https URL
+    created_utc: float | None = None  # unix epoch seconds; None if missing/unparseable
     top_comments: list[RedditComment] = field(default_factory=list)
 
 
@@ -111,6 +112,12 @@ def fetch_post(raw_url: str, top_comments_n: int = 5, timeout: float = 15.0) -> 
     permalink_path = pd.get("permalink") or ""
     permalink = f"https://www.reddit.com{permalink_path}" if permalink_path else raw_url
 
+    created_utc_raw = pd.get("created_utc")
+    try:
+        created_utc = float(created_utc_raw) if created_utc_raw is not None else None
+    except (TypeError, ValueError):
+        created_utc = None
+
     post = RedditPost(
         url=raw_url,
         subreddit=pd.get("subreddit", ""),
@@ -122,6 +129,7 @@ def fetch_post(raw_url: str, top_comments_n: int = 5, timeout: float = 15.0) -> 
         is_self=bool(pd.get("is_self")),
         over_18=bool(pd.get("over_18")),
         permalink=permalink,
+        created_utc=created_utc,
     )
 
     # Comments: second listing (may be missing if requested without comments path).

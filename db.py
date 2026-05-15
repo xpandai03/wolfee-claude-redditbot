@@ -21,6 +21,7 @@ ActionLiteral = Literal[
     "skipped_no_url",
     "skipped_duplicate_post",
     "skipped_not_allowed_sub",
+    "skipped_too_old",
     "skipped_tier2_no_fit",
     "skipped_tier2_missing_brand",
     "skipped_tier3_no_fit",
@@ -36,6 +37,7 @@ ALL_ACTIONS: tuple[ActionLiteral, ...] = (
     "skipped_no_url",
     "skipped_duplicate_post",
     "skipped_not_allowed_sub",
+    "skipped_too_old",
     "skipped_tier2_no_fit",
     "skipped_tier2_missing_brand",
     "skipped_tier3_no_fit",
@@ -50,6 +52,7 @@ CREATE TABLE IF NOT EXISTS processed_emails (
     processed_at  TEXT NOT NULL,
     post_url      TEXT,
     post_id       TEXT,
+    created_utc   REAL,
     tier          INTEGER,
     action        TEXT NOT NULL,
     note          TEXT
@@ -97,6 +100,7 @@ def record(
     action: ActionLiteral,
     post_url: str | None = None,
     post_id: str | None = None,
+    created_utc: float | None = None,
     tier: int | None = None,
     note: str | None = None,
 ) -> None:
@@ -105,13 +109,14 @@ def record(
     with _conn() as c:
         c.execute(
             "INSERT OR REPLACE INTO processed_emails "
-            "(email_id, processed_at, post_url, post_id, tier, action, note) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "(email_id, processed_at, post_url, post_id, created_utc, tier, action, note) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 email_id,
                 datetime.now(timezone.utc).isoformat(timespec="seconds"),
                 post_url,
                 post_id,
+                created_utc,
                 tier,
                 action,
                 note,

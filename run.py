@@ -22,6 +22,7 @@ import telegram_client
 
 
 REDDIT_POLITE_SLEEP_S = 2.0
+MAX_POST_AGE_HOURS = 36.0
 
 
 def _subreddit_from_url(url: str) -> str | None:
@@ -34,10 +35,15 @@ def _post_id_from_url(url: str) -> str | None:
     return m.group(1) if m else None
 
 
-def _process_email(email: gmail_client.F5BotEmail) -> tuple[str, str, int | None, str | None]:
-    """Return (action, summary_line, tier, post_id). Caller handles db.record + errors."""
+def _process_email(
+    email: gmail_client.F5BotEmail,
+) -> tuple[str, str, int | None, str | None, float | None]:
+    """Return (action, summary_line, tier, post_id, created_utc).
+
+    Caller handles db.record + errors.
+    """
     if not email.matches:
-        return "skipped_no_url", f"  · no reddit URL found in {email.subject!r}", None, None
+        return "skipped_no_url", f"  · no reddit URL found in {email.subject!r}", None, None, None
 
     # Process the first URL in the email. f5bot emails almost always contain one.
     match = email.matches[0]
@@ -50,11 +56,12 @@ def _process_email(email: gmail_client.F5BotEmail) -> tuple[str, str, int | None
             f"  · duplicate post {post_id} — {match.url}",
             None,
             post_id,
+            None,
         )
 
     sub = _subreddit_from_url(match.url)
     if sub and sub.lower() in config.BURNED_SUBS:
-        return "skipped_burned_sub", f"  · burned sub r/{sub} — {match.url}", None, post_id
+        return "skipped_burned_sub", f"  · burned sub r/{sub} — {match.url}", None, post_id, None
 
     # Allowlist gate — must run before any Reddit fetch / LLM call.
     if sub and sub.lower() not in config.ALLOWED_SUBS:
@@ -63,6 +70,7 @@ def _process_email(email: gmail_client.F5BotEmail) -> tuple[str, str, int | None
             f"  · r/{sub} not in allowlist — {match.url}",
             None,
             post_id,
+            None,
         )
 
     # Reddit fetch
@@ -70,24 +78,45 @@ def _process_email(email: gmail_client.F5BotEmail) -> tuple[str, str, int | None
         post = reddit_client.fetch_post(match.url, top_comments_n=5)
     except reddit_client.FetchSkip as e:
         time.sleep(REDDIT_POLITE_SLEEP_S)
-        return "skipped_fetch_failed", f"  · {e.reason} — {match.url}", None, post_id
+        return "skipped_fetch_failed", f"  · {e.reason} — {match.url}", None, post_id, None
     time.sleep(REDDIT_POLITE_SLEEP_S)
 
     # Defensive: subreddit-from-URL can disagree with reality (cross-posts, etc).
     if post.subreddit.lower() in config.BURNED_SUBS:
-        return "skipped_burned_sub", f"  · burned sub r/{post.subreddit} (post-fetch)", None, post_id
+        return (
+            "skipped_burned_sub",
+            f"  · burned sub r/{post.subreddit} (post-fetch)",
+            None,
+            post_id,
+            post.created_utc,
+        )
     if post.subreddit.lower() not in config.ALLOWED_SUBS:
         return (
             "skipped_not_allowed_sub",
             f"  · r/{post.subreddit} not in allowlist (post-fetch)",
             None,
             post_id,
+            post.created_utc,
         )
+
+    # Age filter — fall through (don't drop) if timestamp missing or unparseable.
+    if post.created_utc is None:
+        print(f"  · warning: created_utc missing for {match.url}; processing anyway")
+    else:
+        age_hours = (datetime.now(timezone.utc).timestamp() - post.created_utc) / 3600.0
+        if age_hours > MAX_POST_AGE_HOURS:
+            return (
+                "skipped_too_old",
+                f"  · {age_hours:.1f}h old (>{MAX_POST_AGE_HOURS:.0f}h cap) — r/{post.subreddit}",
+                None,
+                post_id,
+                post.created_utc,
+            )
 
     # Classify
     result = claude_client.classify_post(post, keyword=match.keyword)
     if result.tier == 1:
-        return "skipped_tier1", f"  · Tier 1 — {result.reason}", 1, post_id
+        return "skipped_tier1", f"  · Tier 1 — {result.reason}", 1, post_id, post.created_utc
 
     # Draft + deliver
     draft_result = claude_client.draft_comment(post, tier=result.tier, keyword=match.keyword)
@@ -98,6 +127,7 @@ def _process_email(email: gmail_client.F5BotEmail) -> tuple[str, str, int | None
             f"  · Tier {result.tier} {draft_result.skip_reason} — r/{post.subreddit} · {post.title[:60]}",
             result.tier,
             post_id,
+            post.created_utc,
         )
     draft = draft_result.draft
     delivery = telegram_client.DraftDelivery(
@@ -120,6 +150,7 @@ def _process_email(email: gmail_client.F5BotEmail) -> tuple[str, str, int | None
         f"  · Tier {result.tier} draft sent ({wc} words) — r/{post.subreddit} · {post.title[:60]}",
         result.tier,
         post_id,
+        post.created_utc,
     )
 
 
@@ -155,12 +186,13 @@ def main() -> int:
         url = email.matches[0].url if email.matches else None
         post_id = _post_id_from_url(url) if url else None
         try:
-            action, line, tier, post_id_out = _process_email(email)
+            action, line, tier, post_id_out, created_utc = _process_email(email)
             db.record(
                 email.message_id,
                 action,
                 post_url=url,
                 post_id=post_id_out or post_id,
+                created_utc=created_utc,
                 tier=tier,
             )
             print(f"[{email.message_id}] {action}")
@@ -190,6 +222,7 @@ def main() -> int:
             'skipped_no_url',
             'skipped_duplicate_post',
             'skipped_not_allowed_sub',
+            'skipped_too_old',
             'skipped_tier2_no_fit',
             'skipped_tier2_missing_brand',
             'skipped_tier3_no_fit',
@@ -204,6 +237,7 @@ def main() -> int:
         f"(Tier 1: {counts['skipped_tier1']}, "
         f"burned: {counts['skipped_burned_sub']}, "
         f"not allowed: {counts['skipped_not_allowed_sub']}, "
+        f"too old: {counts['skipped_too_old']}, "
         f"duplicate: {counts['skipped_duplicate_post']}, "
         f"fetch failed: {counts['skipped_fetch_failed']}, "
         f"no url: {counts['skipped_no_url']}, "

@@ -18,7 +18,7 @@ import config
 from reddit_client import RedditPost
 
 
-API_USAGE_LOG = config.ROOT / "logs" / "api_usage.jsonl"
+API_USAGE_LOG = config.LOGS_DIR / "api_usage.jsonl"
 
 
 def _log_usage(function: str, resp) -> None:

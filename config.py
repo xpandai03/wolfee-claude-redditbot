@@ -11,12 +11,20 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # --- paths ---
+# All four below are env-overridable so the same code runs unchanged on macOS
+# (cron) and inside a Railway container (volume-backed /data). Defaults
+# reproduce the original repo-root layout, so unset env vars on the Mac give
+# the same behavior as before this refactor.
 ROOT = Path(__file__).parent
-STATE_DIR = ROOT / "state"
+STATE_DIR = Path(os.environ.get("STATE_DIR") or (ROOT / "state"))
+LOGS_DIR = Path(os.environ.get("LOGS_DIR") or (ROOT / "logs"))
 DB_PATH = STATE_DIR / "processed.db"
-PROMPTS_DIR = ROOT / "prompts"
-CREDENTIALS_PATH = ROOT / "credentials.json"
-TOKEN_PATH = ROOT / "token.json"
+PROMPTS_DIR = ROOT / "prompts"  # shipped in the image; never env-overridable
+CREDENTIALS_PATH = Path(os.environ.get("CREDENTIALS_PATH") or (ROOT / "credentials.json"))
+# token.json defaults to repo root on macOS for backwards compat. On Railway
+# point TOKEN_PATH at the mounted volume (e.g. /data/token.json) so refresh
+# rotations persist across container restarts.
+TOKEN_PATH = Path(os.environ.get("TOKEN_PATH") or (ROOT / "token.json"))
 
 # --- secrets / env-driven ---
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")

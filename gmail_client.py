@@ -1,12 +1,16 @@
 """Gmail reader for f5bot emails.
 
-OAuth2 Desktop-app flow on first run: opens a browser, you grant gmail.readonly,
-the resulting refresh token is cached to token.json (gitignored).
+OAuth2 Desktop-app flow on first run (local machine): opens a browser, you
+grant gmail.readonly, the resulting refresh token is cached to token.json
+(gitignored). On Railway, the same token is seeded from the
+GMAIL_TOKEN_JSON env var to TOKEN_PATH on first boot.
 """
 
 from __future__ import annotations
 
 import base64
+import json
+import os
 import re
 from dataclasses import dataclass
 from typing import Iterable
@@ -58,8 +62,62 @@ class F5BotEmail:
     matches: list[F5BotMatch]
 
 
+def _seed_token_from_env() -> bool:
+    """If TOKEN_PATH is absent but GMAIL_TOKEN_JSON env var is set, write
+    the env value to TOKEN_PATH. Returns True iff a seed happened.
+
+    Used for first-boot bootstrap on Railway: the OAuth dance happens once
+    locally, then the resulting token.json is pasted into Railway as the
+    GMAIL_TOKEN_JSON env var. After seeding, refresh rotations write back
+    to TOKEN_PATH (which lives on the mounted volume) so subsequent restarts
+    use the rotated token from disk, not the stale env-var seed.
+    """
+    if config.TOKEN_PATH.exists():
+        return False
+    raw = os.environ.get("GMAIL_TOKEN_JSON")
+    if not raw:
+        return False
+    # Validate the JSON before writing, so a malformed env var fails fast
+    # with a useful message instead of a Credentials-from-file error later.
+    try:
+        json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise RuntimeError(
+            f"GMAIL_TOKEN_JSON env var is set but is not valid JSON: {e}"
+        ) from e
+    config.TOKEN_PATH.parent.mkdir(parents=True, exist_ok=True)
+    config.TOKEN_PATH.write_text(raw)
+    return True
+
+
+def _resolve_credentials_path() -> str | None:
+    """Return a usable client-secrets file path, or None if unresolvable.
+
+    Order: existing CREDENTIALS_PATH file > GMAIL_CREDENTIALS_JSON env var
+    (written to CREDENTIALS_PATH on the fly). On Railway, the consent flow
+    will never actually run, so this only matters for the very first
+    local-machine bootstrap.
+    """
+    if config.CREDENTIALS_PATH.exists():
+        return str(config.CREDENTIALS_PATH)
+    raw = os.environ.get("GMAIL_CREDENTIALS_JSON")
+    if not raw:
+        return None
+    try:
+        json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise RuntimeError(
+            f"GMAIL_CREDENTIALS_JSON env var is set but is not valid JSON: {e}"
+        ) from e
+    config.CREDENTIALS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    config.CREDENTIALS_PATH.write_text(raw)
+    return str(config.CREDENTIALS_PATH)
+
+
 def get_service():
     """Return an authorized Gmail API service object. Triggers consent on first run."""
+    _seed_token_from_env()  # no-op when TOKEN_PATH already exists
+
     creds: Credentials | None = None
     if config.TOKEN_PATH.exists():
         creds = Credentials.from_authorized_user_file(
@@ -69,15 +127,19 @@ def get_service():
         if creds and creds.expired and creds.refresh_token:
             creds.refresh(Request())
         else:
-            if not config.CREDENTIALS_PATH.exists():
+            client_secrets = _resolve_credentials_path()
+            if not client_secrets:
                 raise FileNotFoundError(
-                    f"Missing {config.CREDENTIALS_PATH}. Download the OAuth client "
-                    "JSON from Google Cloud and save it there."
+                    f"Missing {config.CREDENTIALS_PATH} and no "
+                    "GMAIL_CREDENTIALS_JSON env var. Download the OAuth "
+                    "client JSON from Google Cloud and save it there, or "
+                    "set the env var with the JSON contents."
                 )
             flow = InstalledAppFlow.from_client_secrets_file(
-                str(config.CREDENTIALS_PATH), config.GMAIL_SCOPES
+                client_secrets, config.GMAIL_SCOPES
             )
             creds = flow.run_local_server(port=0)
+        config.TOKEN_PATH.parent.mkdir(parents=True, exist_ok=True)
         config.TOKEN_PATH.write_text(creds.to_json())
     return build("gmail", "v1", credentials=creds, cache_discovery=False)
 

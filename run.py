@@ -29,34 +29,49 @@ def _subreddit_from_url(url: str) -> str | None:
     return m.group(1) if m else None
 
 
-def _process_email(email: gmail_client.F5BotEmail) -> tuple[str, str, int | None]:
-    """Return (action, summary_line, tier). Caller handles db.record + errors."""
+def _post_id_from_url(url: str) -> str | None:
+    m = re.search(r"/comments/([A-Za-z0-9]+)", url, re.I)
+    return m.group(1) if m else None
+
+
+def _process_email(email: gmail_client.F5BotEmail) -> tuple[str, str, int | None, str | None]:
+    """Return (action, summary_line, tier, post_id). Caller handles db.record + errors."""
     if not email.matches:
-        return "skipped_no_url", f"  · no reddit URL found in {email.subject!r}", None
+        return "skipped_no_url", f"  · no reddit URL found in {email.subject!r}", None, None
 
     # Process the first URL in the email. f5bot emails almost always contain one.
     match = email.matches[0]
+    post_id = _post_id_from_url(match.url)
+
+    # URL-based dedup: skip before any Reddit fetch or LLM call.
+    if post_id and db.is_post_processed(post_id):
+        return (
+            "skipped_duplicate_post",
+            f"  · duplicate post {post_id} — {match.url}",
+            None,
+            post_id,
+        )
 
     sub = _subreddit_from_url(match.url)
     if sub and sub.lower() in config.BURNED_SUBS:
-        return "skipped_burned_sub", f"  · burned sub r/{sub} — {match.url}", None
+        return "skipped_burned_sub", f"  · burned sub r/{sub} — {match.url}", None, post_id
 
     # Reddit fetch
     try:
         post = reddit_client.fetch_post(match.url, top_comments_n=5)
     except reddit_client.FetchSkip as e:
         time.sleep(REDDIT_POLITE_SLEEP_S)
-        return "skipped_fetch_failed", f"  · {e.reason} — {match.url}", None
+        return "skipped_fetch_failed", f"  · {e.reason} — {match.url}", None, post_id
     time.sleep(REDDIT_POLITE_SLEEP_S)
 
     # Defensive: subreddit-from-URL can disagree with reality (cross-posts, etc).
     if post.subreddit.lower() in config.BURNED_SUBS:
-        return "skipped_burned_sub", f"  · burned sub r/{post.subreddit} (post-fetch)", None
+        return "skipped_burned_sub", f"  · burned sub r/{post.subreddit} (post-fetch)", None, post_id
 
     # Classify
     result = claude_client.classify_post(post, keyword=match.keyword)
     if result.tier == 1:
-        return "skipped_tier1", f"  · Tier 1 — {result.reason}", 1
+        return "skipped_tier1", f"  · Tier 1 — {result.reason}", 1, post_id
 
     # Draft + deliver
     draft = claude_client.draft_comment(post, tier=result.tier, keyword=match.keyword)
@@ -79,6 +94,7 @@ def _process_email(email: gmail_client.F5BotEmail) -> tuple[str, str, int | None
         "drafted",
         f"  · Tier {result.tier} draft sent ({wc} words) — r/{post.subreddit} · {post.title[:60]}",
         result.tier,
+        post_id,
     )
 
 
@@ -112,9 +128,16 @@ def main() -> int:
             break
         new_this_run += 1
         url = email.matches[0].url if email.matches else None
+        post_id = _post_id_from_url(url) if url else None
         try:
-            action, line, tier = _process_email(email)
-            db.record(email.message_id, action, post_url=url, tier=tier)
+            action, line, tier, post_id_out = _process_email(email)
+            db.record(
+                email.message_id,
+                action,
+                post_url=url,
+                post_id=post_id_out or post_id,
+                tier=tier,
+            )
             print(f"[{email.message_id}] {action}")
             print(line)
         except Exception as exc:
@@ -124,6 +147,7 @@ def main() -> int:
                 email.message_id,
                 "error",
                 post_url=url,
+                post_id=post_id,
                 note=f"{type(exc).__name__}: {exc}",
             )
 
@@ -133,13 +157,21 @@ def main() -> int:
     # End-of-run summary line, scoped to this run
     counts = db.counts_since(run_started)
     tiers = db.tier_counts_since(run_started)
+    skipped_total = (
+        counts['skipped_tier1']
+        + counts['skipped_burned_sub']
+        + counts['skipped_fetch_failed']
+        + counts['skipped_no_url']
+        + counts['skipped_duplicate_post']
+    )
     print(
         f"Processed {new_this_run} email(s): "
         f"{counts['drafted']} drafted "
         f"(Tier 2: {tiers.get(2, 0)}, Tier 3: {tiers.get(3, 0)}), "
-        f"{counts['skipped_tier1'] + counts['skipped_burned_sub'] + counts['skipped_fetch_failed'] + counts['skipped_no_url']} skipped "
+        f"{skipped_total} skipped "
         f"(Tier 1: {counts['skipped_tier1']}, "
         f"burned: {counts['skipped_burned_sub']}, "
+        f"duplicate: {counts['skipped_duplicate_post']}, "
         f"fetch failed: {counts['skipped_fetch_failed']}, "
         f"no url: {counts['skipped_no_url']}), "
         f"errors: {counts['error']}"

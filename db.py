@@ -19,6 +19,7 @@ ActionLiteral = Literal[
     "skipped_burned_sub",
     "skipped_fetch_failed",
     "skipped_no_url",
+    "skipped_duplicate_post",
     "error",
 ]
 
@@ -28,6 +29,7 @@ ALL_ACTIONS: tuple[ActionLiteral, ...] = (
     "skipped_burned_sub",
     "skipped_fetch_failed",
     "skipped_no_url",
+    "skipped_duplicate_post",
     "error",
 )
 
@@ -37,11 +39,13 @@ CREATE TABLE IF NOT EXISTS processed_emails (
     email_id      TEXT PRIMARY KEY,
     processed_at  TEXT NOT NULL,
     post_url      TEXT,
+    post_id       TEXT,
     tier          INTEGER,
     action        TEXT NOT NULL,
     note          TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_processed_at ON processed_emails(processed_at);
+CREATE INDEX IF NOT EXISTS idx_post_id ON processed_emails(post_id);
 """
 
 
@@ -82,6 +86,7 @@ def record(
     email_id: str,
     action: ActionLiteral,
     post_url: str | None = None,
+    post_id: str | None = None,
     tier: int | None = None,
     note: str | None = None,
 ) -> None:
@@ -90,17 +95,29 @@ def record(
     with _conn() as c:
         c.execute(
             "INSERT OR REPLACE INTO processed_emails "
-            "(email_id, processed_at, post_url, tier, action, note) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
+            "(email_id, processed_at, post_url, post_id, tier, action, note) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
             (
                 email_id,
                 datetime.now(timezone.utc).isoformat(timespec="seconds"),
                 post_url,
+                post_id,
                 tier,
                 action,
                 note,
             ),
         )
+
+
+def is_post_processed(post_id: str) -> bool:
+    """True if any prior email already produced a row for this Reddit post id."""
+    if not post_id:
+        return False
+    with _conn() as c:
+        row = c.execute(
+            "SELECT 1 FROM processed_emails WHERE post_id = ? LIMIT 1", (post_id,)
+        ).fetchone()
+        return row is not None
 
 
 def counts_since(since_iso: str) -> dict[str, int]:

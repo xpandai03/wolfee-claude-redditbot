@@ -89,7 +89,12 @@ def _render_draft_system(tier: int) -> str:
     )
 
 
-def _post_to_user_message(post: RedditPost, keyword: str | None) -> str:
+def _post_to_user_message(
+    post: RedditPost,
+    keyword: str | None,
+    max_comments: int = 5,
+    comment_char_cap: int = 600,
+) -> str:
     selftext = post.selftext.strip()
     if len(selftext) > 4000:
         selftext = selftext[:4000] + "\n…[truncated]"
@@ -105,13 +110,13 @@ def _post_to_user_message(post: RedditPost, keyword: str | None) -> str:
     parts.append("")
     parts.append("--- Post body ---")
     parts.append(selftext if selftext else "(no body — link post)")
-    if post.top_comments:
+    if post.top_comments and max_comments > 0:
         parts.append("")
         parts.append("--- Top comments (for context) ---")
-        for c in post.top_comments:
+        for c in post.top_comments[:max_comments]:
             body = c.body.strip()
-            if len(body) > 600:
-                body = body[:600] + "…"
+            if len(body) > comment_char_cap:
+                body = body[:comment_char_cap] + "…"
             parts.append(f"[{c.score}] u/{c.author}: {body}")
     return "\n".join(parts)
 
@@ -140,7 +145,9 @@ def classify_post(post: RedditPost, keyword: str | None = None) -> ClassifyResul
     """Return Tier 1/2/3 + a one-sentence reason."""
     client = _get_client()
     system_text = _render_classify_system()
-    user_text = _post_to_user_message(post, keyword)
+    # Classifier gets a leaner thread snapshot: 3 comments × 400 chars.
+    # The drafter (below) keeps the full 5 × 600 since it needs richer context.
+    user_text = _post_to_user_message(post, keyword, max_comments=3, comment_char_cap=400)
 
     resp = client.messages.create(
         model=config.CLAUDE_MODEL,

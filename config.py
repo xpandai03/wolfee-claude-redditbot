@@ -45,7 +45,6 @@ ALLOWED_SUBS = frozenset({
     "techsales",
     "salesdevelopment",
     "cscareerquestions",
-    "sales",
     "sdr",
     "salesoperations",
     "findapath",

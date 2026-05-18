@@ -50,6 +50,28 @@ def _is_systemic_error(exc: BaseException) -> bool:
     return False
 
 
+def _is_transient_error(exc: BaseException) -> bool:
+    """True iff exc is a transient Anthropic failure — network, timeout,
+    rate-limit, or a 5xx. These should NOT burn the email permanently;
+    let it retry on the next tick. RateLimitError and InternalServerError
+    are subclasses of APIStatusError, so an explicit isinstance check on
+    each is more readable than walking the hierarchy. The trailing
+    APIStatusError check is a defensive catch for any 5xx that arrives
+    on the base class (e.g. 502/503/504 in some SDK versions)."""
+    if isinstance(exc, (
+        anthropic.APIConnectionError,
+        anthropic.APITimeoutError,
+        anthropic.RateLimitError,
+        anthropic.InternalServerError,
+    )):
+        return True
+    if isinstance(exc, anthropic.APIStatusError):
+        status = getattr(exc, "status_code", None)
+        if isinstance(status, int) and status >= 500:
+            return True
+    return False
+
+
 def _subreddit_from_url(url: str) -> str | None:
     m = re.search(r"reddit\.com/r/([A-Za-z0-9_]+)/", url, re.I)
     return m.group(1) if m else None
@@ -264,6 +286,16 @@ def main() -> int:
                 tick_aborted = True
                 print(
                     f"[{email.message_id}] systemic anthropic error — "
+                    "email NOT recorded, will retry next tick",
+                    file=sys.stderr,
+                )
+            elif _is_transient_error(exc):
+                # Don't record — a connection/timeout/ratelimit/5xx is a
+                # blip, not a verdict on the email. Let it retry next tick.
+                # Don't abort the tick either: the next email might land
+                # on a different region / coincide with the blip ending.
+                print(
+                    f"[{email.message_id}] transient anthropic error — "
                     "email NOT recorded, will retry next tick",
                     file=sys.stderr,
                 )

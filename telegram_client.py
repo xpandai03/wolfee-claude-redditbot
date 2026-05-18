@@ -7,8 +7,14 @@ copy → paste into Reddit, done.
 
 from __future__ import annotations
 
+import hashlib
 import html
+import json
+import re
+import sys
+import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 import requests
 
@@ -24,6 +30,121 @@ TELEGRAM_API = "https://api.telegram.org"
 # message is fine; truncate defensively just in case.
 MAX_LEN = 4000
 
+# --- alert dedup ---------------------------------------------------------
+# Suppress duplicate error alerts that hit the same exception class + similar
+# message text within a 1h window. The bot wakes every 30 min, so a systemic
+# outage (auth, billing, sustained 5xx) would otherwise generate 2+ alerts per
+# hour as new emails arrive. Dedup lets the first alert through and silences
+# the rest, so you still get a real ping and don't get spammed.
+#
+# Storage: append-only JSONL on the mounted volume so dedup state survives
+# the cron container exiting between ticks.
+ALERT_DEDUP_PATH = config.LOGS_DIR / "alert_dedup.jsonl"
+ALERT_DEDUP_TTL_S = 3600
+ALERT_DEDUP_MAX_BYTES = 1_000_000
+ALERT_DEDUP_MAX_LINES = 10_000
+
+# Per-email variability we strip from error messages so different emails
+# hitting the same outage produce the same dedup key:
+#   - 16-char lowercase hex   → Gmail message ids like 19e3ad9ecb82ef0a
+#   - 6+ digit runs           → request ids, token counts
+#   - "Error code: NNN" /
+#     "status: NNN"           → so e.g. a 502 and a 503 from the same Anthropic
+#                               outage collapse to one dedup class.
+_NORMALIZE_HEX_RE = re.compile(r"\b[0-9a-f]{16}\b")
+_NORMALIZE_NUM_RE = re.compile(r"\b\d{6,}\b")
+_NORMALIZE_STATUS_RE = re.compile(r"\b(?:error\s*code|status)\s*[:=]?\s*\d{3}\b")
+
+
+def _normalize_msg(msg: str) -> str:
+    s = msg.lower().strip()
+    s = _NORMALIZE_HEX_RE.sub("<id>", s)
+    s = _NORMALIZE_STATUS_RE.sub("<status>", s)
+    s = _NORMALIZE_NUM_RE.sub("<n>", s)
+    s = re.sub(r"\s+", " ", s)
+    return s[:80]
+
+
+def _dedup_key(exc: BaseException) -> tuple[str, str]:
+    return type(exc).__name__, _normalize_msg(str(exc))
+
+
+def _key_hash(klass: str, excerpt: str) -> str:
+    return hashlib.sha1(f"{klass}|{excerpt}".encode()).hexdigest()[:16]
+
+
+def _is_recent_dup(klass: str, excerpt: str) -> bool:
+    """True iff an identical (class, normalized-excerpt) record sits inside
+    ALERT_DEDUP_TTL_S. Raises only on truly unexpected errors; caller wraps."""
+    if not ALERT_DEDUP_PATH.exists():
+        return False
+    cutoff = time.time() - ALERT_DEDUP_TTL_S
+    target = _key_hash(klass, excerpt)
+    with ALERT_DEDUP_PATH.open() as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except Exception:
+                continue
+            if rec.get("key_hash") != target:
+                continue
+            try:
+                t = datetime.fromisoformat(rec.get("ts_iso", "")).timestamp()
+            except Exception:
+                continue
+            if t >= cutoff:
+                return True
+    return False
+
+
+def _record_alert(klass: str, excerpt: str) -> None:
+    ALERT_DEDUP_PATH.parent.mkdir(parents=True, exist_ok=True)
+    rec = {
+        "ts_iso": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "key_hash": _key_hash(klass, excerpt),
+        "exception_class": klass,
+        "message_excerpt": excerpt,
+    }
+    with ALERT_DEDUP_PATH.open("a") as f:
+        f.write(json.dumps(rec) + "\n")
+    try:
+        st = ALERT_DEDUP_PATH.stat()
+        if st.st_size > ALERT_DEDUP_MAX_BYTES:
+            _truncate_dedup_file()
+            return
+        with ALERT_DEDUP_PATH.open() as f:
+            count = sum(1 for _ in f)
+        if count > ALERT_DEDUP_MAX_LINES:
+            _truncate_dedup_file()
+    except Exception:
+        pass
+
+
+def _truncate_dedup_file() -> None:
+    """Rewrite the dedup file keeping only records inside ALERT_DEDUP_TTL_S."""
+    cutoff = time.time() - ALERT_DEDUP_TTL_S
+    keep: list[str] = []
+    with ALERT_DEDUP_PATH.open() as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+                t = datetime.fromisoformat(rec.get("ts_iso", "")).timestamp()
+            except Exception:
+                continue
+            if t >= cutoff:
+                keep.append(line)
+    tmp = ALERT_DEDUP_PATH.with_suffix(".tmp")
+    with tmp.open("w") as f:
+        for ln in keep:
+            f.write(ln + "\n")
+    tmp.replace(ALERT_DEDUP_PATH)
+
 
 def send_error_alert(prefix: str, exc: BaseException) -> None:
     """Best-effort short error notification. NEVER raises.
@@ -31,14 +152,35 @@ def send_error_alert(prefix: str, exc: BaseException) -> None:
     Used by run.py to surface silent breaks (auth expiry, network, API errors)
     so you notice within hours, not days. If Telegram itself is the failure
     domain, this becomes a no-op and the error stays in logs/cron.log only.
+
+    Dedup: see ALERT_DEDUP_* above. Failures in the dedup path fall through
+    to the original send-anyway behavior so a corrupted state file can never
+    suppress a real alert.
     """
     try:
+        try:
+            klass, excerpt = _dedup_key(exc)
+            if _is_recent_dup(klass, excerpt):
+                print(
+                    f"[telegram_client] alert suppressed (dedup): "
+                    f"class={klass} excerpt={excerpt!r}",
+                    file=sys.stderr,
+                )
+                return
+        except Exception:
+            klass = type(exc).__name__
+            excerpt = ""
+
         msg_body = f"{type(exc).__name__}: {exc}"[:200]
         text = html.escape(f"⚠ Wolfee Reddit bot error: {prefix}: {msg_body}")
         send_message(text, disable_preview=True)
+
+        try:
+            _record_alert(klass, excerpt)
+        except Exception:
+            pass
     except Exception:
-        # Swallow — do not let alert failure block the main pipeline or
-        # cause a recursive error storm.
+        # Never let alert failure block the main pipeline or cascade.
         pass
 
 

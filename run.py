@@ -13,6 +13,8 @@ import time
 import traceback
 from datetime import datetime, timezone
 
+import anthropic
+
 import claude_client
 import config
 import db
@@ -23,6 +25,29 @@ import telegram_client
 
 REDDIT_POLITE_SLEEP_S = 2.0
 MAX_POST_AGE_HOURS = 36.0
+
+
+# Keywords that mark a BadRequestError as systemic (account-level) rather
+# than a malformed-input problem with this specific email. When one of these
+# appears, every subsequent Anthropic call this tick will also fail, so we
+# halt the tick instead of burning through the queue.
+_SYSTEMIC_BADREQUEST_HINTS = (
+    "credit balance",
+    "billing",
+    "invalid_api_key",
+    "invalid api key",
+)
+
+
+def _is_systemic_error(exc: BaseException) -> bool:
+    """True iff exc indicates a systemic Anthropic outage that will affect
+    every email this tick — auth, permission, or a billing/invalid-key 400."""
+    if isinstance(exc, (anthropic.AuthenticationError, anthropic.PermissionDeniedError)):
+        return True
+    if isinstance(exc, anthropic.BadRequestError):
+        msg = str(exc).lower()
+        return any(h in msg for h in _SYSTEMIC_BADREQUEST_HINTS)
+    return False
 
 
 def _subreddit_from_url(url: str) -> str | None:
@@ -186,8 +211,20 @@ def main() -> int:
     print(f"[{run_started}] starting run. {len(processed_ids)} email(s) in processed log{limit_str}.")
 
     new_this_run = 0
+    tick_aborted = False
     email_iter = gmail_client.iter_unprocessed_emails(service, processed_ids)
     while True:
+        if tick_aborted:
+            # A systemic Anthropic error fired earlier in this tick. Every
+            # remaining email would burn the same way. Defer them to the next
+            # tick (don't fetch, don't record). The triggering email is also
+            # left unrecorded so it gets a real shot once the outage clears.
+            print(
+                "circuit breaker: halting tick after systemic anthropic error; "
+                "remaining emails deferred to next tick",
+                file=sys.stderr,
+            )
+            break
         try:
             email = next(email_iter)
         except StopIteration:
@@ -221,14 +258,24 @@ def main() -> int:
         except Exception as exc:
             tb = traceback.format_exc(limit=2)
             print(f"[{email.message_id}] error: {exc}\n{tb}", file=sys.stderr)
-            db.record(
-                email.message_id,
-                "error",
-                post_url=url,
-                post_id=post_id,
-                keyword=keyword,
-                note=f"{type(exc).__name__}: {exc}",
-            )
+            if _is_systemic_error(exc):
+                # Don't record — let this email retry on the next tick once
+                # the credit/auth issue is resolved. Alert (subject to dedup).
+                tick_aborted = True
+                print(
+                    f"[{email.message_id}] systemic anthropic error — "
+                    "email NOT recorded, will retry next tick",
+                    file=sys.stderr,
+                )
+            else:
+                db.record(
+                    email.message_id,
+                    "error",
+                    post_url=url,
+                    post_id=post_id,
+                    keyword=keyword,
+                    note=f"{type(exc).__name__}: {exc}",
+                )
             telegram_client.send_error_alert(
                 f"email {email.message_id}", exc
             )

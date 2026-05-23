@@ -33,19 +33,21 @@ Decision rules:
   ("what apps do you use for interview prep?", "any live copilot for sales
   calls?"). Naming Wolfee is the right answer.
 
-- **Tier 2** — Post is related to Wolfee's use cases (someone struggling with
-  interviews, asking for advice on call prep, etc.) but is NOT a direct
-  tool-request. We can mention Wolfee as one option among others, framed as
-  personal experience, in service of a genuine answer.
+- **Tier 2** — Post touches any of Wolfee's adjacent territory: meetings,
+  interviews, presentations, sales conversations, screen recording, async
+  video, or professional communication generally. The OP does NOT have to be
+  asking for tools — discussing the topic is enough. Mention Wolfee as one
+  option among others, framed as personal experience, in service of a
+  genuine answer.
 
-- **Tier 1** — Post is only tangentially related. The OP is venting about
-  general career stress, the topic is adjacent (e.g. "how do I get a job"
-  rather than "how do I prep for an interview"), or any Wolfee mention would
-  feel like an ad. We skip.
+- **Tier 1** — Post has no meaningful overlap with the above territory. The
+  OP is venting about wholly unrelated topics, or any Wolfee mention would
+  be a stretch even with creative framing. We skip.
 
-When unsure between two tiers, **pick the lower one** (Tier 1 over Tier 2,
-Tier 2 over Tier 3). Wolfee's brand is hurt more by feeling spammy than by
-missing one comment.
+When unsure between two tiers, **pick the higher one** (Tier 3 over Tier 2,
+Tier 2 over Tier 1). We'd rather review more drafts on Telegram and discard
+the weak ones than miss opportunities — a human still gates every comment
+before it gets posted.
 
 # Output format
 

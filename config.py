@@ -41,7 +41,7 @@ GMAIL_SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"]
 
 # --- subs we never comment on (burned / off-brand) ---
 # Match is case-insensitive against the sub name (without r/ prefix).
-BURNED_SUBS = {"saas", "sales"}
+BURNED_SUBS: set[str] = set()
 
 # --- allowlist: only these subs reach the classifier ---
 # Burned subs always override the allowlist (hard block).
@@ -76,6 +76,25 @@ ALLOWED_SUBS = frozenset({
     "ycombinator",
     "microsaas",
     "growmybusiness",
+    # expanded scope (2026-05): remote/async work, recording, broader business
+    "remotework",
+    "wfh",
+    "productivity",
+    "tools",
+    "software",
+    "freelance",
+    "recruiting",
+    "careerguidance",
+    "saas",
+    "startups",
+    "entrepreneur",
+    "smallbusiness",
+    "sales",
+    "marketing",
+    "videoediting",
+    "screenrecording",
+    "telecommuting",
+    "workonline",
 })
 
 # --- wolfee positioning ---
@@ -87,22 +106,46 @@ Wolfee's core use cases (for tier classification):
 - recorded meeting analysis, conversation intelligence
 - meeting transcription with action items
 - context-switching across high-stakes calls
+- screen recording with AI transcription and shareable links
+- Loom alternative with automatic summaries
+- async video messaging for teams
+- recording and sharing product demos
 """.strip()
 
 WOLFEE_FEATURES = """
-Wolfee has three product moments. Be accurate; never claim features that aren't shipped.
+Wolfee is ONE tool that replaces a stack of four. Be accurate; never claim
+features that aren't shipped. Core pitch: stop paying for 4 disconnected tools
+that don't talk to each other — Wolfee handles everything before, during,
+after, and between professional conversations.
 
-1. Practice (Simulate) — AI-powered conversation simulator for interview, sales, and
-   negotiation practice. Avatars push back. Post-session scoring.
+Four capabilities (each replaces a standalone tool):
 
-2. Perform (Wolfee Copilot) — live Mac desktop copilot that listens to real calls and
-   surfaces suggestions. Hidden from screen share on Zoom / Meet / Teams in most setups.
+1. Screen + webcam recorder (Loom alternative, ~$15/mo standalone) — built-in
+   screen and webcam recording with AI transcription, automatic summaries,
+   and shareable links. Use cases: async video updates, product demos,
+   walkthroughs instead of scheduling another meeting.
 
-3. Review (Record + Analyze) — meeting bot that joins Zoom / Meet / Teams, transcribes,
-   generates notes and action items.
+2. Meeting recorder (Fireflies / Otter alternative, ~$18/mo standalone) —
+   joins Zoom / Meet / Teams, records and transcribes the call, extracts
+   action items, syncs notes to your tools.
 
-Pricing: Free tier (1 simulation + 3 meetings/mo, 10-min copilot session cap).
-Paid: Starter $19/mo, Pro $39/mo.
+3. AI interview simulator (interview-prep tools, $20-40/mo standalone) —
+   practices interviews, sales calls, and negotiations with you via video
+   call. AI avatars push back in real time. Post-session scoring and
+   feedback.
+
+4. Invisible Copilot (no standalone equivalent) — live Mac desktop assistant
+   that listens to real calls and surfaces AI suggestions only you can see.
+   Hidden from screen share on Zoom / Meet / Teams in most setups.
+
+Timeline framing (lean on this when the post is about workflow, not one tool):
+- Before the call: practice with the AI simulator
+- During the call: live coaching from the invisible Copilot
+- After the call: auto-generated transcript, summary, action items
+- Between calls: record and share async video updates
+
+Pricing: $19/mo for the full stack vs $60-80/mo equivalent bought separately.
+Free tier: 1 simulation + 3 meetings/mo, 10-min copilot session cap.
 Site: https://wolfee.io
 """.strip()
 

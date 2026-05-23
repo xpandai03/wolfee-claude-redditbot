@@ -351,6 +351,8 @@ def main() -> int:
         f"t3 missing_brand: {counts['skipped_tier3_missing_brand']}), "
         f"errors: {counts['error']}"
     )
+
+    telegram_client.send_tick_summary(run_started, new_this_run, counts, tiers)
     return 0
 
 

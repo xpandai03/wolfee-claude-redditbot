@@ -242,6 +242,62 @@ def render_draft_message(d: DraftDelivery) -> str:
     )
 
 
+def render_tick_summary(
+    started_iso: str,
+    new_this_run: int,
+    counts: dict[str, int],
+    tier_counts: dict[int, int],
+) -> str:
+    """Compact per-tick funnel summary. Shows where emails are getting filtered
+    out so you can spot 'gate is too narrow' vs 'classifier is too strict' vs
+    'F5Bot stopped sending' at a glance from your phone."""
+    drafted = counts.get("drafted", 0)
+    errors = counts.get("error", 0)
+    classified = drafted + sum(
+        counts.get(k, 0) for k in (
+            "skipped_tier1",
+            "skipped_tier2_no_fit",
+            "skipped_tier2_missing_brand",
+            "skipped_tier3_no_fit",
+            "skipped_tier3_missing_brand",
+        )
+    )
+    tier_str = f"T2:{tier_counts.get(2, 0)}, T3:{tier_counts.get(3, 0)}"
+
+    lines = [
+        f"<b>Tick</b> {html.escape(started_iso)}",
+        f"Found: {new_this_run} · Classified: {classified} · Drafted: {drafted} ({tier_str})",
+    ]
+    # Only non-zero skip reasons, sorted by count desc; strip "skipped_" prefix.
+    skips = {
+        k[len("skipped_"):]: v
+        for k, v in counts.items()
+        if k.startswith("skipped_") and v > 0
+    }
+    if skips:
+        compact = ", ".join(
+            f"{k}:{v}" for k, v in sorted(skips.items(), key=lambda kv: -kv[1])
+        )
+        lines.append(f"Skipped: {sum(skips.values())} — {compact}")
+    if errors:
+        lines.append(f"Errors: {errors}")
+    return "\n".join(lines)
+
+
+def send_tick_summary(
+    started_iso: str,
+    new_this_run: int,
+    counts: dict[str, int],
+    tier_counts: dict[int, int],
+) -> None:
+    """Best-effort heartbeat + funnel diagnostic at end of each cron tick.
+    Never raises — a Telegram blip mustn't break the pipeline."""
+    try:
+        send_message(render_tick_summary(started_iso, new_this_run, counts, tier_counts))
+    except Exception as e:
+        print(f"[telegram_client] tick summary send failed: {e}", file=sys.stderr)
+
+
 def render_skip_message(
     subreddit: str | None,
     title: str | None,

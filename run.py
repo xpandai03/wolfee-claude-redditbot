@@ -352,7 +352,12 @@ def main() -> int:
         f"errors: {counts['error']}"
     )
 
-    telegram_client.send_tick_summary(run_started, new_this_run, counts, tiers)
+    # Only ping Telegram when the tick produced something actionable: a
+    # delivered draft, or an error worth surfacing. Idle / all-skipped ticks
+    # stay silent so the main chat isn't buried under a heartbeat every 30 min.
+    # .get() with default 0 so this can't KeyError if counts ever drifts shape.
+    if counts.get("drafted", 0) > 0 or counts.get("error", 0) > 0:
+        telegram_client.send_tick_summary(run_started, new_this_run, counts, tiers)
     return 0
 
 

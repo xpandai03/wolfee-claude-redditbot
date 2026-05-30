@@ -107,18 +107,11 @@ def _process_email(
         )
 
     sub = _subreddit_from_url(match.url)
+    # Denylist gate — runs before any Reddit fetch / LLM call so junk subs cost
+    # us nothing. Phase 2 (2026-05-29) removed the allowlist that used to sit
+    # here; the classifier (gated by human review on Telegram) is now the filter.
     if sub and sub.lower() in config.BURNED_SUBS:
         return "skipped_burned_sub", f"  · burned sub r/{sub} — {match.url}", None, post_id, None
-
-    # Allowlist gate — must run before any Reddit fetch / LLM call.
-    if sub and sub.lower() not in config.ALLOWED_SUBS:
-        return (
-            "skipped_not_allowed_sub",
-            f"  · r/{sub} not in allowlist — {match.url}",
-            None,
-            post_id,
-            None,
-        )
 
     # Reddit fetch
     try:
@@ -128,19 +121,12 @@ def _process_email(
         return "skipped_fetch_failed", f"  · {e.reason} — {match.url}", None, post_id, None
     time.sleep(REDDIT_POLITE_SLEEP_S)
 
-    # Defensive: subreddit-from-URL can disagree with reality (cross-posts, etc).
+    # Defensive: subreddit-from-URL can disagree with reality (cross-posts, etc),
+    # so re-check the denylist against the actually-fetched sub.
     if post.subreddit.lower() in config.BURNED_SUBS:
         return (
             "skipped_burned_sub",
             f"  · burned sub r/{post.subreddit} (post-fetch)",
-            None,
-            post_id,
-            post.created_utc,
-        )
-    if post.subreddit.lower() not in config.ALLOWED_SUBS:
-        return (
-            "skipped_not_allowed_sub",
-            f"  · r/{post.subreddit} not in allowlist (post-fetch)",
             None,
             post_id,
             post.created_utc,

@@ -39,63 +39,51 @@ REDDIT_USER_AGENT = os.environ.get(
 # --- gmail scope ---
 GMAIL_SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"]
 
-# --- subs we never comment on (burned / off-brand) ---
-# Match is case-insensitive against the sub name (without r/ prefix).
-BURNED_SUBS: set[str] = set()
+# --- denylist: subs we never comment on (burned / off-brand / junk) ---
+# Phase 2 (2026-05-29): inverted the funnel from allowlist to denylist. Every
+# F5Bot-matched post now reaches the classifier UNLESS its sub is listed here.
+# (Previously a ~48-sub ALLOWED_SUBS frozenset gated everything pre-classifier
+# and killed ~90% of candidates; see wolfee-comment-agent-diagnosis-2026-05-28.md.)
+# Seeded from the Bucket-3 junk clusters in
+# wolfee-comment-agent-silence-diagnosis-2026-05-28b.md.
+# Match is case-insensitive; the gate lowercases the sub before comparing, and
+# the set below is force-lowercased at build time so casing here can't bite us.
+_BURNED_SUBS_SEED = {
+    # gaming
+    "rainbow6mobile", "destinythegame", "winlator", "kanepixelsbackrooms",
+    "forsakenroblox", "ssbm", "geometrydasheditor",
+    # local / city / country
+    "salemma", "astoria", "askza", "casualuk", "calpolypomona", "twentiesindia",
+    # medical
+    "breastcancer", "clotsurvivors", "medicalschool",
+    # phone display
+    "galaxys26ultra", "s25ultra",
+    # misc off-topic
+    "throughtheveil", "girldinnerdiaries", "plussize", "askteachers", "aviation",
+    "deferredmba", "postdoc", "socialworkuk", "wellsfargobank", "recruiter_advice",
+    "ai_art_is_not_art", "aiacteu", "cfp", "learnart", "techsupport",
+    "freelance_forhire", "selfdrivingcars", "womenintech", "entrepreneurs",
+    "chatgptcomplaints", "buhaydigital", "zsh",
+}
 
-# --- allowlist: only these subs reach the classifier ---
-# Burned subs always override the allowlist (hard block).
-# Lowercase comparison; entries here must be lowercase.
-ALLOWED_SUBS = frozenset({
-    "jobsearchhacks",
-    "interviewhacking",
-    "recruitinghell",
-    "techsales",
-    "salesdevelopment",
-    "cscareerquestions",
-    "sdr",
-    "salesoperations",
-    "findapath",
-    "layoffs",
-    "jobs",
-    "csmajors",
-    "productmanagement",
-    "consulting",
-    "askhr",
-    "interviews",
-    "interviewhackers",
-    "jobsearch",
-    "careeradvice",
-    "careeradvice_india",
-    "productmanagement_in",
-    "ainotetaker",
-    "aitoolbench",
-    "indiehackers",
-    "entrepreneurridealong",
-    "sideproject",
-    "ycombinator",
-    "microsaas",
-    "growmybusiness",
-    # expanded scope (2026-05): remote/async work, recording, broader business
-    "remotework",
-    "wfh",
-    "productivity",
-    "tools",
-    "software",
-    "freelance",
-    "recruiting",
-    "careerguidance",
-    "saas",
-    "startups",
-    "entrepreneur",
-    "smallbusiness",
-    "sales",
-    "marketing",
-    "videoediting",
-    "screenrecording",
-    "telecommuting",
-    "workonline",
-})
+# Fail-open safety valve. With the allowlist gone, the denylist is the only sub
+# gate, so a runaway/bloated denylist (bad merge, accidental paste) is the one
+# way this funnel could silently choke. If the list ever exceeds the threshold,
+# log loudly and fall OPEN (empty denylist -> everything reaches the classifier)
+# rather than fail closed. 1000 is ~25x the intended size — far above any real
+# denylist, low enough to catch a genuine accident.
+_BURNED_SUBS_MAX = 1000
+if len(_BURNED_SUBS_SEED) > _BURNED_SUBS_MAX:
+    import sys as _sys
+    print(
+        f"WARNING: BURNED_SUBS has {len(_BURNED_SUBS_SEED)} entries "
+        f"(> {_BURNED_SUBS_MAX}); failing OPEN (denylist disabled) so the bot "
+        f"does not silently block all traffic. Check config.py.",
+        file=_sys.stderr,
+    )
+    BURNED_SUBS: set[str] = set()
+else:
+    BURNED_SUBS = {s.lower() for s in _BURNED_SUBS_SEED}
 
 # --- wolfee positioning ---
 WOLFEE_USE_CASES = """
